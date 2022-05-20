@@ -374,12 +374,8 @@ jobs:
           echo "cat $GITHUB_ENV"
           cat $GITHUB_ENV
           echo '-----'
-          du -sh $OPENWRT_ROOT_PATH/build_dir/targets/$DEVICE_PLATFORM/
-          echo '-----'
           echo "cat $GITHUB_ENV"
           cat $GITHUB_ENV
-          echo '-----'
-          du -sh $OPENWRT_ROOT_PATH/build_dir/targets/$DEVICE_PLATFORM/
           echo '-----'
 
       - name: Upload Bin Archive
