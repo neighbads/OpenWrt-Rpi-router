@@ -6,25 +6,30 @@
 # Blog: https://p3terx.com
 #=================================================
 
-name: Build bcm27xx/bcm2711 openwrt
+name: Build mtk-mips/mt7621 openwrt
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: 0 18 * * *
+  #schedule:
+  #  - cron: 0 18 * * *
   # watch:
   #   types: started
+  push:
+  #  branches:
+  #    - master
+    paths:
+      - 'general-packages.config'
 
 env:
-  CONFIG_FILE: config/bcm27xx/bcm2711.config
-  SOURCE_URL: https://github.com/immortalwrt/immortalwrt
+  CONFIG_FILE: config/mtk-mips/mt7621.config
+  SOURCE_URL: https://github.com/neighbads/immortalwrt
   SOURCE_BRANCH: openwrt-18.06-k5.4
   DIY_SH: scripts/custom.sh
   TOOLCHAIN_TAG: toolchain
-  CLASH_BINARY_PLATFORM: armv8
+  CLASH_BINARY_PLATFORM: mips
   TOOLCHAIN_RELEASE_UPLOAD: true
   FIRMWARE_RELEASE_UPLOAD: true
-  WEB_ROOT_PATH: /data/www/openwrt.cc
+  WEB_ROOT_PATH: /home/openwrt/www/openwrt
   TZ: Asia/Shanghai
 
 jobs:
@@ -161,7 +166,7 @@ jobs:
         if: env.TOOLCHAIN_RELEASE_UPLOAD == 'true' && steps.hash.outputs.REBUILD_TOOLCHAIN == 'true'
         uses: mknejp/delete-release-assets@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GIT_HUB_TOKEN }}
           tag: ${{ env.TOOLCHAIN_TAG }}
           assets: "toolchain-${{ env.TOOLCHAIN_IMAGE }}.*"
           fail-if-no-assets: false
@@ -176,7 +181,7 @@ jobs:
           replacesArtifacts: true
           tag: ${{ env.TOOLCHAIN_TAG }}
           commit: ${{ env.CURRENT_BRANCH }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GIT_HUB_TOKEN }}
           artifacts: output/*
 
   Build:
@@ -291,15 +296,11 @@ jobs:
         run: |
           [ -e files ] && mv files $OPENWRT_ROOT_PATH/files
           [ -e $CONFIG_FILE ] && mv $CONFIG_FILE $OPENWRT_ROOT_PATH/.config
-          cat config/general-packages.config >> $OPENWRT_ROOT_PATH/.config
-          cat config/extra-drivers.config >> $OPENWRT_ROOT_PATH/.config
+          cat config/general-packages-mini.config >> $OPENWRT_ROOT_PATH/.config
           cd $OPENWRT_ROOT_PATH
-          echo -e "CONFIG_USB_LAN78XX=y\nCONFIG_USB_NET_DRIVERS=y" >> target/linux/bcm27xx/bcm2711/config-5.4
-          sed -i 's/36/44/g;s/VHT80/VHT20/g' package/kernel/mac80211/files/lib/wifi/mac80211.sh
           chmod +x $GITHUB_WORKSPACE/scripts/*.sh
+          sed -i '/sed.*zsh.*passwd.*/d' $GITHUB_WORKSPACE/$DIY_SH
           $GITHUB_WORKSPACE/$DIY_SH
-          $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_BINARY_PLATFORM
-          $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
           make defconfig
 
       - name: Download DL Package
@@ -341,11 +342,8 @@ jobs:
             mv key-build.pub $(usign -F -p key-build.pub)
           fi
           cd $OPENWRT_ROOT_PATH
-          echo "dtparam=i2c_arm=on,audio=on" >> target/linux/bcm27xx/image/config.txt
           mkdir -p files/etc/uci-defaults/
           cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
-          mkdir -p files/www/snapshots
-          cp -r bin/targets files/www/snapshots
           make package/install -j$(nproc) || make package/install -j1 V=s
           make target/install -j$(nproc) || make target/install -j1 V=s
           make json_overview_image_info
@@ -373,6 +371,24 @@ jobs:
           echo 'btrfs filesystem usage'
           sudo btrfs filesystem usage $GITHUB_WORKSPACE
           echo '-----'
+          echo "cat $GITHUB_ENV"
+          cat $GITHUB_ENV
+          echo '-----'
+          echo "cat $GITHUB_ENV"
+          cat $GITHUB_ENV
+          echo '-----'
+
+      - name: Start SSH via NPS
+        if: ${{ failure() }}
+        run: |
+          echo "### Update user: $USER password ###"
+          echo -e "${{ secrets.NPS_USER_PASS }}\n${{ secrets.NPS_USER_PASS }}" | sudo passwd "$USER"
+          cd $OPENWRT_ROOT_PATH
+          mkdir nps && cd nps
+          wget https://github.com/ehang-io/nps/releases/download/v0.26.10/linux_amd64_client.tar.gz
+          tar zxf linux_amd64_client.tar.gz
+          ./npc -server=${{ secrets.NPS_SERVER }} -vkey=${{ secrets.NPS_VKEY }} -type=tcp
+          #sleep 1h
 
       - name: Upload Bin Archive
         uses: actions/upload-artifact@main
@@ -426,40 +442,11 @@ jobs:
           rm -rf packages
           df -hT $PWD
 
-      - name: Deploy Files To HostHatch Node
-        env:
-          HOST: "${{ secrets.REMOTE_USER }}@${{ secrets.HOSTHATCH_IP }}"
-          SOURCE_TARGETS: "${{ env.OPENWRT_ROOT_PATH }}/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
-          DEST_TARGETS: "${{ env.WEB_ROOT_PATH }}/releases/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
-          REMOTE_PRIVATEKEY: "${{ secrets.HOSTHATCH_PRIVATEKEY }}"
-        if: env.REMOTE_PRIVATEKEY != null
-        run: |
-          mkdir -p ~/.ssh/
-          install -m 600 /dev/null ~/.ssh/id_rsa
-          echo "${{ secrets.HOSTHATCH_PRIVATEKEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh -q -t -i ~/.ssh/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $HOST \
-          bash -c "'mkdir -p $WEB_ROOT_PATH/releases/targets/$DEVICE_TARGET/$DEVICE_SUBTARGET'"
-          rsync -chavP --delete -e 'ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no' $SOURCE_TARGETS $HOST:$DEST_TARGETS
-
-      - name: Deploy Files To Backblaze
-        env:
-          B2_APPLICATION_KEY: "${{ secrets.B2_APPLICATION_KEY }}"
-          B2_APPLICATION_KEY_ID: "${{ secrets.B2_APPLICATION_KEY_ID }}"
-          SOURCE_TARGETS: "${{ env.OPENWRT_ROOT_PATH }}/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
-          DEST_TARGETS: "b2://${{ secrets.B2_BUCKETNAME }}/releases/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
-        if: env.B2_APPLICATION_KEY != null && env.B2_APPLICATION_KEY_ID != null
-        run: |
-          sudo wget -q -O /bin/b2 https://github.com/Backblaze/B2_Command_Line_Tool/releases/latest/download/b2-linux
-          sudo chmod +x /bin/b2
-          b2 authorize-account $B2_APPLICATION_KEY_ID $B2_APPLICATION_KEY
-          b2 sync --noProgress --threads 32 --keepDays 7 --replaceNewer $SOURCE_TARGETS $DEST_TARGETS
-
       - name: Delete Old Firmware Assets
         if: steps.hash.outputs.REBUILD_TOOLCHAIN == 'true'
         uses: mknejp/delete-release-assets@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GIT_HUB_TOKEN }}
           tag: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
           fail-if-no-assets: false
           fail-if-no-release: false
@@ -475,5 +462,35 @@ jobs:
           tag: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
           body: ${{ env.BUILD_DATE }}
           commit: ${{ env.CURRENT_BRANCH }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GIT_HUB_TOKEN }}
           artifacts: ${{ env.OPENWRT_ROOT_PATH }}/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/*
+
+      - name: Deploy Files To HostHatch Node
+        env:
+          HOST: "${{ secrets.REMOTE_USER }}@${{ secrets.HOSTHATCH_IP }}"
+          PORT: "${{ secrets.HOSTHATCH_PORT }}"
+          SOURCE_TARGETS: "${{ env.OPENWRT_ROOT_PATH }}/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
+          DEST_TARGETS: "${{ env.WEB_ROOT_PATH }}/releases/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
+          REMOTE_PRIVATEKEY: "${{ secrets.HOSTHATCH_PRIVATEKEY }}"
+        if: env.REMOTE_PRIVATEKEY != null
+        run: |
+          mkdir -p ~/.ssh/
+          install -m 600 /dev/null ~/.ssh/id_rsa
+          echo "${{ secrets.HOSTHATCH_PRIVATEKEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh -q -t -i ~/.ssh/id_rsa -p $PORT -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $HOST \
+          bash -c "'mkdir -p $WEB_ROOT_PATH/releases/targets/$DEVICE_TARGET/$DEVICE_SUBTARGET'"
+          rsync -chavP --delete -e "ssh -i ~/.ssh/id_rsa -p $PORT -o StrictHostKeyChecking=no" $SOURCE_TARGETS $HOST:$DEST_TARGETS
+
+      - name: Deploy Files To Backblaze
+        env:
+          B2_APPLICATION_KEY: "${{ secrets.B2_APPLICATION_KEY }}"
+          B2_APPLICATION_KEY_ID: "${{ secrets.B2_APPLICATION_KEY_ID }}"
+          SOURCE_TARGETS: "${{ env.OPENWRT_ROOT_PATH }}/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
+          DEST_TARGETS: "b2://${{ secrets.B2_BUCKETNAME }}/releases/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/"
+        if: env.B2_APPLICATION_KEY != null && env.B2_APPLICATION_KEY_ID != null
+        run: |
+          sudo wget -q -O /bin/b2 https://github.com/Backblaze/B2_Command_Line_Tool/releases/latest/download/b2-linux
+          sudo chmod +x /bin/b2
+          b2 authorize-account $B2_APPLICATION_KEY_ID $B2_APPLICATION_KEY
+          b2 sync --noProgress --threads 32 --keepDays 7 --replaceNewer $SOURCE_TARGETS $DEST_TARGETS

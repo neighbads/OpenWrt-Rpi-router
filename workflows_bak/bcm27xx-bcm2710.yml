@@ -6,7 +6,7 @@
 # Blog: https://p3terx.com
 #=================================================
 
-name: Build x86/64 openwrt
+name: Build bcm27xx/bcm2710 openwrt
 
 on:
   workflow_dispatch:
@@ -21,12 +21,12 @@ on:
       - 'general-packages.config'
 
 env:
-  CONFIG_FILE: config/x86/64.config
+  CONFIG_FILE: config/bcm27xx/bcm2710.config
   SOURCE_URL: https://github.com/neighbads/immortalwrt
   SOURCE_BRANCH: openwrt-18.06-k5.4
   DIY_SH: scripts/custom.sh
   TOOLCHAIN_TAG: toolchain
-  CLASH_BINARY_PLATFORM: amd64
+  CLASH_BINARY_PLATFORM: armv8
   TOOLCHAIN_RELEASE_UPLOAD: true
   FIRMWARE_RELEASE_UPLOAD: true
   WEB_ROOT_PATH: /home/openwrt/www/openwrt
@@ -343,6 +343,7 @@ jobs:
             mv key-build.pub $(usign -F -p key-build.pub)
           fi
           cd $OPENWRT_ROOT_PATH
+          echo "dtparam=i2c_arm=on,audio=on" >> target/linux/bcm27xx/image/config.txt
           mkdir -p files/etc/uci-defaults/
           cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
           mkdir -p files/www/snapshots
@@ -377,18 +378,9 @@ jobs:
           echo "cat $GITHUB_ENV"
           cat $GITHUB_ENV
           echo '-----'
-
-      - name: Start SSH via NPS
-        if: ${{ failure() }}
-        run: |
-          echo "### Update user: $USER password ###"
-          echo -e "${{ secrets.NPS_USER_PASS }}\n${{ secrets.NPS_USER_PASS }}" | sudo passwd "$USER"
-          cd $OPENWRT_ROOT_PATH
-          mkdir nps && cd nps
-          wget https://github.com/ehang-io/nps/releases/download/v0.26.10/linux_amd64_client.tar.gz
-          tar zxf linux_amd64_client.tar.gz
-          ./npc -server=${{ secrets.NPS_SERVER }} -vkey=${{ secrets.NPS_VKEY }} -type=tcp
-          #sleep 1h
+          echo "cat $GITHUB_ENV"
+          cat $GITHUB_ENV
+          echo '-----'
 
       - name: Upload Bin Archive
         uses: actions/upload-artifact@main
